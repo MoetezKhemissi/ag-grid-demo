@@ -1,120 +1,228 @@
-import React, { useState, useEffect } from 'react';
-import { AgGridReact } from 'ag-grid-react';
-import 'ag-grid-community/styles/ag-grid.css';
-import 'ag-grid-community/styles/ag-theme-alpine.css';
-import PropTypes from 'prop-types';
+import React, { useState, useEffect, useRef } from "react";
+import { AgGridReact } from "ag-grid-react";
+import "ag-grid-community/styles/ag-grid.css";
+import "ag-grid-community/styles/ag-theme-alpine.css";
+import PropTypes from "prop-types";
 
 const TableComponent = ({ dates, initialValues, numItems = 3 }) => {
   const [rowData, setRowData] = useState([]);
   const [columnDefs, setColumnDefs] = useState([]);
-
-  // Initialize the table data and columns based on dates and initialValues
+  const groupIndicesRef = useRef({}); 
+  const gridRef = useRef(null); 
+  const [sortingColumn, setSortingColumn] = useState(null);
+  const dataRef = useRef([]);
   useEffect(() => {
-    // Dynamically create column definitions based on dates
+    const initializeData = () => {
+      const items = [];
+      const indices = {};
+
+      for (let i = 0; i < numItems; i++) {
+        const itemNumber = i + 1;
+        const itemGroup = `Item ${itemNumber}`;
+        const groupIndex = i;
+
+        indices[itemGroup] = i; 
+
+       
+        const outputRow = {
+          Item: `Item ${itemNumber}`,
+          ItemGroup: itemGroup,
+          GroupIndex: groupIndex,
+          Type: "Output",
+          key: `Item${itemNumber}-Output`,
+        };
+        const shiftRow = {
+          Item: "",
+          ItemGroup: itemGroup,
+          GroupIndex: groupIndex,
+          Type: "Shift",
+          key: `Item${itemNumber}-Shift`,
+        };
+        const overwriteRow = {
+          Item: "",
+          ItemGroup: itemGroup,
+          GroupIndex: groupIndex,
+          Type: "Overwrite",
+          key: `Item${itemNumber}-Overwrite`,
+        };
+        const inputRow = {
+          Item: "",
+          ItemGroup: itemGroup,
+          GroupIndex: groupIndex,
+          Type: "Input",
+          key: `Item${itemNumber}-Input`,
+        };
+
+       
+        dates.forEach((date) => {
+          outputRow[date] = initialValues[i] ? initialValues[i][date] || 0 : 0;
+          inputRow[date] = initialValues[i] ? initialValues[i][date] || 0 : 0;
+        });
+
+        items.push(outputRow, shiftRow, overwriteRow, inputRow);
+      }
+
+      setRowData(items);
+      dataRef.current = items;
+      groupIndicesRef.current = indices; 
+    };
+
+    initializeData();
+  }, [dates, initialValues, numItems]);
+
+  useEffect(() => {
     const dynamicColumns = dates.map((date) => ({
       field: date,
       headerName: date,
-      editable: false,
-      valueParser: (params) => parseFloat(params.newValue) || '',
-      // Optionally, you can set width or other properties here
+      editable: (params) =>
+        params.data.Type === "Shift" || params.data.Type === "Overwrite",
+      sortable: true,
+      comparator: (valueA, valueB, nodeA, nodeB) =>
+        customGroupComparator(valueA, valueB, nodeA, nodeB, false, date),
     }));
 
-    // Add fixed columns: Item and Type
     const fixedColumns = [
-      { field: 'Item', headerName: 'Item', width: 120 },
-      { field: 'Type', headerName: 'Type', width: 120 },
+      { field: "ItemGroup", headerName: "Item Group", hide: true },
+      { field: "GroupIndex", headerName: "Group Index", hide: true },
+      {
+        field: "Item",
+        headerName: "Item",
+        width: 120,
+        sortable: true,
+        comparator: (valueA, valueB, nodeA, nodeB) => {
+          // Sort by ItemGroup to keep 4 related rows together
+          const groupA = nodeA.data.ItemGroup;
+          const groupB = nodeB.data.ItemGroup;
+          return groupA.localeCompare(groupB);
+        },
+      },
+      {
+        field: "Type",
+        headerName: "Type",
+        width: 120,
+        sortable: false, 
+      },
       ...dynamicColumns,
     ];
 
-    // Define which columns are editable (Shift and Overwrite)
-    fixedColumns.forEach((col) => {
-      if (dates.includes(col.field)) {
-        col.editable = true;
-      }
-    });
-
     setColumnDefs(fixedColumns);
+  }, [dates]);
 
-    // Initialize row data based on numItems and dates
-    const items = [];
-    for (let i = 0; i < numItems; i++) {
-      const itemNumber = i + 1;
-      // Output Row
-      const outputRow = {
-        Item: `Item ${itemNumber}`,
-        Type: 'Output',
-      };
-      // Shift Row
-      const shiftRow = {
-        Item: '',
-        Type: 'Shift',
-      };
-      // Overwrite Row
-      const overwriteRow = {
-        Item: '',
-        Type: 'Overwrite',
-      };
-      // Input Row
-      const inputRow = {
-        Item: '',
-        Type: 'Input',
-      };
+  const customGroupComparator = (
+    valueA,
+    valueB,
+    nodeA,
+    nodeB,
+    isDescending,
+    sortingColumn
+  ) => {
+    const groupIndexA = groupIndicesRef.current[nodeA.data?.ItemGroup];
+    const groupIndexB = groupIndicesRef.current[nodeB.data?.ItemGroup];
 
-      // Populate Output and Input with initialValues
-      dates.forEach((date) => {
-        outputRow[date] = initialValues[i] ? initialValues[i][date] || 0 : 0;
-        inputRow[date] = initialValues[i] ? initialValues[i][date] || 0 : 0;
-      });
+    const valueForGroupA = isDescending
+      ? getMaxValueForGroup(nodeA.data?.ItemGroup, sortingColumn)
+      : getMinValueForGroup(nodeA.data?.ItemGroup, sortingColumn);
+    const valueForGroupB = isDescending
+      ? getMaxValueForGroup(nodeB.data?.ItemGroup, sortingColumn)
+      : getMinValueForGroup(nodeB.data?.ItemGroup, sortingColumn);
 
-      items.push(outputRow, shiftRow, overwriteRow, inputRow);
+    if (valueForGroupA !== valueForGroupB) {
+      return valueForGroupA - valueForGroupB;
     }
 
-    setRowData(items);
-  }, [dates, initialValues, numItems]);
+    return groupIndexA - groupIndexB;
+  };
+  const getMinValueForGroup = (group, date) => {
+    if (!group || !date) {
+      console.error("Group or date is undefined when calculating min value");
+      return undefined;
+    }
 
-  // Handle cell value changes to recalculate Output
+    const groupRows = dataRef.current.filter(
+      (row) => row.ItemGroup === group && row.Type === "Output"
+    ); 
+
+    const values = groupRows
+      .map((row) => {
+        const value = parseFloat(row[date]);
+
+        return value;
+      })
+      .filter((val) => !isNaN(val));
+
+    const minValue = values.length > 0 ? Math.min(...values) : undefined;
+
+    return minValue !== undefined ? minValue : Infinity;
+  };
+
+  const getMaxValueForGroup = (group, date) => {
+    if (!group || !date) {
+      console.error("Group or date is undefined when calculating max value");
+      return undefined;
+    }
+
+    const groupRows = dataRef.current.filter(
+      (row) => row.ItemGroup === group && row.Type === "Output"
+    ); 
+
+    const values = groupRows
+      .map((row) => {
+        const value = parseFloat(row[date]);
+
+        return value;
+      })
+      .filter((val) => !isNaN(val));
+
+    const maxValue = values.length > 0 ? Math.max(...values) : undefined;
+
+    return maxValue !== undefined ? maxValue : -Infinity;
+  };
+
   const onCellValueChanged = (params) => {
     const updatedRows = [...rowData];
-    const rowIndex = params.node.rowIndex;
-    const field = params.colDef.field;
+    const groupKey = params.data?.ItemGroup;
+    if (!groupKey) return;
 
-    // Determine the group index (each item has 4 rows)
-    const groupIndex = Math.floor(rowIndex / 4) * 4;
+    const groupRows = updatedRows.filter((row) => row.ItemGroup === groupKey);
+    const outputRow = groupRows.find((row) => row.Type === "Output");
+    const shiftRow = groupRows.find((row) => row.Type === "Shift");
+    const overwriteRow = groupRows.find((row) => row.Type === "Overwrite");
+    const inputRow = groupRows.find((row) => row.Type === "Input");
 
-    const outputRow = updatedRows[groupIndex];
-    const shiftRow = updatedRows[groupIndex + 1];
-    const overwriteRow = updatedRows[groupIndex + 2];
-    const inputRow = updatedRows[groupIndex + 3];
+    if (!outputRow || !shiftRow || !overwriteRow || !inputRow) return;
 
-    // Recalculate Output for all dates
     dates.forEach((date) => {
-      const overwriteValue = parseFloat(overwriteRow[date]);
+      const overwriteValue = parseFloat(overwriteRow[date]) || 0;
       const shiftValue = parseFloat(shiftRow[date]) || 0;
       const inputValue = parseFloat(inputRow[date]) || 0;
 
-      if (!isNaN(overwriteValue)) {
-        outputRow[date] = overwriteValue;
-      } else {
-        outputRow[date] = inputValue + shiftValue;
-      }
+      outputRow[date] =
+        !isNaN(overwriteValue) && overwriteValue !== 0
+          ? overwriteValue
+          : inputValue + shiftValue;
     });
-
+    dataRef.current = updatedRows;
     setRowData(updatedRows);
   };
 
   return (
     <div
       className="ag-theme-alpine"
-      style={{ height: 600, width: '100%', marginTop: '20px' }}
+      style={{ height: 600, width: "100%", marginTop: "20px" }}
     >
       <AgGridReact
+        ref={gridRef}
         rowData={rowData}
         columnDefs={columnDefs}
         onCellValueChanged={onCellValueChanged}
-        defaultColDef={{
-          flex: 1,
-          minWidth: 100,
-          resizable: true,
+        defaultColDef={{ flex: 1, minWidth: 100, resizable: true }}
+        onSortChanged={(event) => {
+          const sortedColumns = event.columns || [];
+          if (sortedColumns.length > 0) {
+            setSortingColumn(sortedColumns[0].getColId());
+          } else {
+            setSortingColumn(null);
+          }
         }}
         suppressRowClickSelection={true}
         rowSelection="multiple"
